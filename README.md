@@ -148,16 +148,3 @@ forge deploy -e development
 forge install --upgrade -e development -s <site> -p Confluence   # and -p Jira
 ```
 
-## Limitations (honest list)
-
-- **A tripwire is only as good as its query.** Hindsight counts Jira issues; some assumptions (for example latency) cannot
-  be measured by Jira bug counts. A person (or the Rovo agent, with confirmation) chooses the query.
-- **Suggestions are drafts.** The built-in suggester uses fixed text rules (assumption wording and numbers with units) as a
-  fallback that always works. The Rovo agent reads the page with real understanding. Either way a human confirms each one.
-- **Forge storage is separate for the Jira and Confluence installations.** To let a Rovo session on a Jira ticket see an
-  assumption, Hindsight also stores a small summary on the Revisit ticket (a Jira issue property).
-- **The scheduler runs as the app**, so it only sees Jira projects the app user can browse. Reads shown to a person run as
-  that person.
-- **Rovo needs a site where Rovo is enabled** (Atlassian documents a verified business domain and a paid or trial plan).
-  Everything else works without Rovo.
-- **Not yet validated with working teams.** Our evidence is public sources, listed in DEVPOST.md.
