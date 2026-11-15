@@ -1,0 +1,545 @@
+modules:
+  # The "Hindsight" item that appears under the title of every Confluence page.
+  # Clicking it opens a panel listing that page's assumptions.
+  confluence:contentBylineItem:
+    - key: hindsight-byline
+      resource: main
+      render: native
+      resolver:
+        function: resolver
+      title: Hindsight
+      tooltip: Assumption tripwires for this page
+  # A full-page "Assumption Health" dashboard in the Confluence sidebar (Apps menu).
+  confluence:globalPage:
+    - key: hindsight-global-page
+      resource: dashboard
+      render: native
+      resolver:
+        function: resolver
+      title: Assumption Health
+      route: hindsight
+  # Settings page (Confluence admin > Apps). Confluence only shows this to site administrators.
+  confluence:globalSettings:
+    - key: hindsight-settings
+      resource: settings
+      render: native
+      resolver:
+        function: resolver
+      title: Hindsight
+  # ---- The Rovo agent "Hindsight" (appears in Rovo chat > Browse agents) ----
+  rovo:agent:
+    - key: hindsight-agent
+      name: Hindsight
+      description: Watches your Confluence design-doc assumptions against live Jira evidence and tells you which ones reality has broken.
+      prompt: |
+        You are Hindsight, a careful engineering assistant. You help software teams see which assumptions in their
+        Confluence design docs have been contradicted by what is actually happening in Jira.
+
+        HARD RULES
+        0. KEYWORD SIMILARITY IS NOT PROOF. A Jira issue that merely mentions the same words is RELATED evidence. Say "contradicts" only when an
+           action returned the status "contradicted". For each evidence issue you may give your own judgement (contradicts, supports, unrelated, or
+           cannot tell) and explain why, but label it as your judgement. A person records reviews; you never change a status.
+        1. NEVER invent numbers, counts, dates, issue keys, assumptions, or ticket keys. Only report values returned by your actions.
+           If an action did not return a value, say you do not have it.
+        2. Counts and statuses come from actions (they are computed by code). You may explain them, never change or estimate them.
+        3. Always cite evidence by Jira issue key (for example HSW-4) and name the Confluence page when you know it.
+           When you write a link, use ONLY a url or pageUrl value returned by an action, exactly as given. NEVER build, guess or
+           shorten a link yourself and never invent a site address. If no url was returned, write just the issue key.
+        4. Never save anything without an explicit "yes" from the user for that specific assumption.
+        5. If an action returns an error, show the error plainly and suggest the next step. Do not guess around it.
+
+        WHAT YOU DO
+        - "Which assumptions are broken?": call list-assumptions with status "attention" (contradicted or at risk). Present each with its
+          status word EXACTLY as returned, the matches versus its threshold and window, the Jira ticket, and the page. Keep the two apart:
+          "contradicted" means the defined criteria are met or a person confirmed it; "at risk" means related issues need investigating and is
+          NOT proof. If nothing needs attention, say so and mention how many are healthy, unverified or stale.
+        - "Explain why <assumption> needs attention": call explain-assumption. Report its assessmentNow status exactly as returned. You must
+          not upgrade or downgrade it: a status comes from code, never from you. Then READ each evidence issue summary against the assumption and
+          honestly judge, issue by issue, whether it supports or contradicts the assumption or is probably unrelated. Be explicit that
+          the judgement is yours while the count, the issue keys and the suggested owner come from Hindsight. Name the suggested owner.
+        - "What assumptions does this page make?": call get-page-content, read the text, and propose assumptions that are specific and
+          testable (numbers, limits, "never/always", expectations about load, latency, size, uptime, or user behaviour). Skip anything in
+          alreadySavedAssumptions. For EACH proposal also draft a tripwire: a JQL query that would find Jira issues contradicting it
+          (prefer project = KEY AND issuetype = Bug ...), a window in days (default 14) and a threshold (default 3). Ask the user which
+          Jira project key to use if you do not know it. List the proposals, then ask which ones to save. Only after a clear yes, call save-assumption.
+        - Working on a Jira ticket whose title starts with "Revisit assumption": call explain-assumption with ticketKey set to that
+          ticket's key (for example KAN-8). Judge each evidence issue as in "Explain why", then suggest next steps. Never pass a Jira
+          issue key as a pageId; page IDs are numbers only.
+        - "Is release X safe to ship?" or any go/no-go question: call release-readiness with release set to X (if the user gave no
+          release, call it with no release and ask which one they mean). State the verdict EXACTLY as returned (ready, at-risk,
+          blocked or unknown) and the reasons exactly as returned. NEVER call a release safe unless the verdict is "ready".
+          If the verdict is "unknown", say Hindsight cannot tell because no assumptions are linked, and offer to link some.
+          For each blocker call explain-assumption (use its ticketKey) and judge the evidence issue by issue. Finish with a short
+          go/no-go brief: the verdict, the blockers, who to ask (the suggested owner), and one next step.
+        - Linking an assumption to a release: only after the user confirms which assumption and which release, call link-assumption.
+        - Accepting a risk: ONLY when the user explicitly says they accept the risk, gives a reason in their own words (ask for it
+          if missing) and says for how many days. Repeat back what you will record and wait for a clear yes, then call accept-risk.
+          Only site administrators can do this; if the action refuses, say so plainly. NEVER accept a risk on your own initiative.
+        - Hindsight ALREADY prepares a recommended plan automatically (a comment, the suggested owner, a follow-up task) whenever an assumption
+          becomes at risk or contradicted. Tell the user it is waiting for their approval in the Hindsight panel on the page. Only call
+          propose-resolution when the user wants a better plan (a revised sentence for the doc, other tasks); it REPLACES the plan.
+        - RESOLVE WORKFLOW ("help me resolve this", or after you explained an assumption that is at risk or contradicted). Prepare ONE plan by calling
+          propose-resolution once, with everything you recommend: comment (your evidence review in a few plain sentences, no invented
+          numbers), assignOwner true, followupTasks (one task title per line), and newSentence plus the new threshold, window or query
+          when the claim should change. Then tell the user the plan is READY BUT NOTHING HAS BEEN DONE: they open the design doc, click
+          Hindsight under the title, find the assumption, tick the steps they approve, and click Apply. List the proposed steps in your
+          reply. Never claim a step was done unless an action returned success. If propose-resolution says it cannot save the plan
+          (for example when you were started from a Jira ticket), describe the plan in your reply instead.
+          Only when the user says "just do it" for a specific step may you call comment-on-ticket, assign-ticket, create-followup-task,
+          revise-assumption or update-doc-sentence directly. NEVER close or resolve a ticket yourself: a person decides that.
+        - "Is this doc still up to date?": call doc-freshness. If it says configured is false, explain that the user should set the Jira area
+          for the page in the Hindsight panel. If issues changed since the last edit, read their summaries against the page text
+          (call get-page-content) and say which claims they most likely affect, labelling that as your judgement.
+
+        STYLE: short, plain English, no hype. Use a small list when there are several items. Offer one sensible next step.
+      conversationStarters:
+        - Help me resolve this broken assumption.
+        - Is this release safe to ship?
+        - Which assumptions are broken right now?
+        - What assumptions does this page make?
+        - Why does this assumption need attention?
+        - Is this doc still up to date?
+      actions:
+        - list-assumptions
+        - explain-assumption
+        - get-page-content
+        - doc-freshness
+        - save-assumption
+        - release-readiness
+        - link-assumption
+        - accept-risk
+        - comment-on-ticket
+        - assign-ticket
+        - create-followup-task
+        - revise-assumption
+        - update-doc-sentence
+        - propose-resolution
+  # ---- Actions: what the agent can DO. Each one runs a function below. ----
+  action:
+    - key: list-assumptions
+      name: List assumptions
+      function: listAssumptionsFn
+      actionVerb: GET
+      description: |
+        Lists tracked assumptions with status (healthy, at-risk, contradicted, unverified, stale), reasons, matches, threshold, ticket and page. Use status "attention" for "which are broken".
+      inputs:
+        status:
+          title: Status
+          type: string
+          required: false
+          description: "Optional filter: attention (contradicted or at risk), contradicted, at-risk, healthy, unverified or stale"
+        pageId:
+          title: Confluence page ID
+          type: string
+          required: false
+          description: "Optional. Only assumptions on this Confluence page."
+        ticketKey:
+          title: Revisit ticket key
+          type: string
+          required: false
+          description: "Optional Jira issue key such as KAN-8 to find the assumption that ticket was created for."
+        thisPage:
+          title: Only the open page
+          type: boolean
+          required: false
+          description: "True if the user means the page they currently have open"
+    - key: explain-assumption
+      name: Explain assumption
+      function: explainAssumptionFn
+      actionVerb: GET
+      description: |
+        Returns one assumption with its live Jira count, evidence issues and a suggested owner. Read-only. The status in assessmentNow is computed by code; never change it.
+      inputs:
+        ticketKey:
+          title: Revisit ticket key
+          type: string
+          required: false
+          description: "A Jira issue key such as KAN-8. Use it when the user is on a 'Revisit assumption' ticket; it identifies the assumption exactly."
+        assumptionId:
+          title: Assumption ID
+          type: string
+          required: false
+          description: "The id from list-assumptions, if known"
+        text:
+          title: Assumption words
+          type: string
+          required: false
+          description: "Words from the assumption, e.g. 'checkout orders per minute', if the id is not known"
+    - key: get-page-content
+      name: Get page content
+      function: getPageContentFn
+      actionVerb: GET
+      description: |
+        Reads the text of a Confluence page (the one open in chat, or a given page ID) so you can propose assumptions or judge doc freshness.
+        Also returns assumptions already saved for that page.
+      inputs:
+        pageId:
+          title: Confluence page ID
+          type: string
+          required: false
+          description: "Optional. Defaults to the page the user has open."
+    - key: doc-freshness
+      name: Doc freshness
+      function: docFreshnessFn
+      actionVerb: GET
+      description: |
+        Checks whether Jira work in the doc's area has changed since the Confluence page was last edited. Returns the changed issues.
+      inputs:
+        pageId:
+          title: Confluence page ID
+          type: string
+          required: false
+          description: "Optional. Defaults to the page the user has open."
+    - key: save-assumption
+      name: Save assumption
+      function: saveAssumptionFn
+      actionVerb: CREATE
+      description: |
+        Saves ONE new assumption with its tripwire. Call this ONLY after the user has explicitly confirmed this specific assumption.
+      inputs:
+        text:
+          title: Assumption text
+          type: string
+          required: true
+          description: "The assumption, as one clear sentence"
+        jql:
+          title: Tripwire JQL
+          type: string
+          required: true
+          description: "JQL that finds Jira issues contradicting the assumption, e.g. project = HSW AND issuetype = Bug. No ORDER BY."
+        windowDays:
+          title: Window in days
+          type: integer
+          required: false
+          description: "Look at issues created in the last N days. Default 14."
+        threshold:
+          title: Threshold
+          type: integer
+          required: false
+          description: "Trips when this many issues match or more. Default 3."
+        pageId:
+          title: Confluence page ID
+          type: string
+          required: false
+          description: "Optional. Defaults to the page the user has open."
+    - key: release-readiness
+      name: Release readiness
+      function: releaseReadinessFn
+      actionVerb: GET
+      description: |
+        Answers "is this release safe to ship?". Returns a verdict (ready, at-risk, blocked or unknown) computed by Hindsight's fixed
+        rules, the reasons, and the assumptions linked to the release. With no release it lists all releases and their verdicts.
+      inputs:
+        release:
+          title: Release
+          type: string
+          required: false
+          description: "The release name or key, for example 'Checkout v2.0' or 'KAN-3'"
+    - key: link-assumption
+      name: Link assumption to a release
+      function: linkAssumptionFn
+      actionVerb: UPDATE
+      description: |
+        Links ONE assumption to a release. Call it only after the user has confirmed which assumption and which release.
+      inputs:
+        release:
+          title: Release
+          type: string
+          required: false
+          description: "The release name or key"
+        ticketKey:
+          title: Revisit ticket key
+          type: string
+          required: false
+          description: "A Jira issue key such as KAN-8, if the assumption has a Revisit ticket"
+        text:
+          title: Assumption words
+          type: string
+          required: false
+          description: "Words from the assumption, if no ticket key is known"
+        assumptionId:
+          title: Assumption ID
+          type: string
+          required: false
+          description: "The id from list-assumptions, if known"
+    - key: accept-risk
+      name: Accept risk
+      function: acceptRiskFn
+      actionVerb: UPDATE
+      description: |
+        Records that the team knowingly ships with an at-risk or contradicted assumption, with a written reason and expiry. Admins only. Call only after an explicit yes, the user's own reason, and the days.
+      inputs:
+        reason:
+          title: Reason
+          type: string
+          required: false
+          description: "The user's own written reason for accepting the risk (at least 10 characters)"
+        days:
+          title: Days
+          type: integer
+          required: false
+          description: "How many days the acceptance lasts (1 to 90, default 14)"
+        ticketKey:
+          title: Revisit ticket key
+          type: string
+          required: false
+          description: "A Jira issue key such as KAN-8"
+        text:
+          title: Assumption words
+          type: string
+          required: false
+          description: "Words from the assumption, if no ticket key is known"
+        assumptionId:
+          title: Assumption ID
+          type: string
+          required: false
+          description: "The id from list-assumptions, if known"
+    - key: comment-on-ticket
+      name: Comment on ticket
+      function: commentOnTicketFn
+      actionVerb: UPDATE
+      description: |
+        Posts a comment on a Revisit ticket. Call it only after the user said yes. You write the comment (plain sentences, no invented
+        numbers); the action adds a line with the numbers computed by Hindsight.
+      inputs:
+        ticketKey:
+          title: Ticket key
+          type: string
+          required: false
+          description: "The Jira ticket key, for example KAN-12"
+        comment:
+          title: Comment
+          type: string
+          required: false
+          description: "The comment text: your evidence review in a few plain sentences"
+    - key: assign-ticket
+      name: Assign ticket to suggested owner
+      function: assignTicketFn
+      actionVerb: UPDATE
+      description: |
+        Assigns the Revisit ticket to the suggested owner, who is worked out by code from the evidence issues. Call it only after the user said yes.
+      inputs:
+        ticketKey:
+          title: Ticket key
+          type: string
+          required: false
+          description: "The Revisit ticket key, for example KAN-12"
+        text:
+          title: Assumption words
+          type: string
+          required: false
+          description: "Words from the assumption, if no ticket key is known"
+    - key: create-followup-task
+      name: Create follow-up task
+      function: createFollowupTaskFn
+      actionVerb: CREATE
+      description: |
+        Creates ONE Jira task for follow-up work and links it to the Revisit ticket. Call it only after the user said yes to that specific task.
+      inputs:
+        summary:
+          title: Task summary
+          type: string
+          required: false
+          description: "A short, clear task title"
+        description:
+          title: Task description
+          type: string
+          required: false
+          description: "Optional details"
+        ticketKey:
+          title: Revisit ticket key
+          type: string
+          required: false
+          description: "The Revisit ticket this follow-up relates to, for example KAN-12"
+    - key: revise-assumption
+      name: Revise assumption
+      function: reviseAssumptionFn
+      actionVerb: UPDATE
+      description: |
+        Changes an assumption's wording, threshold, window or Jira query and resets it to unchecked, so Hindsight watches the revised claim.
+        Call it only after the user agreed the new values.
+      inputs:
+        ticketKey:
+          title: Revisit ticket key
+          type: string
+          required: false
+          description: "The Revisit ticket key of the assumption, for example KAN-12"
+        text:
+          title: Current assumption words
+          type: string
+          required: false
+          description: "Words of the CURRENT assumption, if no ticket key is known"
+        newText:
+          title: New wording
+          type: string
+          required: false
+          description: "The new wording of the assumption"
+        threshold:
+          title: New threshold
+          type: integer
+          required: false
+          description: "New number of matching issues that trips it"
+        windowDays:
+          title: New window in days
+          type: integer
+          required: false
+          description: "New time window in days"
+        jql:
+          title: New Jira query
+          type: string
+          required: false
+          description: "New JQL (no ORDER BY)"
+    - key: update-doc-sentence
+      name: Update design doc sentence
+      function: updateDocSentenceFn
+      actionVerb: UPDATE
+      description: |
+        Replaces ONE sentence in the Confluence design doc with an agreed new one. It edits only if the sentence appears exactly once;
+        the old version stays in the page history. Call it only after the user agreed the exact new sentence.
+      inputs:
+        ticketKey:
+          title: Revisit ticket key
+          type: string
+          required: false
+          description: "The Revisit ticket key of the assumption, for example KAN-12"
+        text:
+          title: Current assumption words
+          type: string
+          required: false
+          description: "Words of the current assumption, if no ticket key is known"
+        oldSentence:
+          title: Old sentence
+          type: string
+          required: false
+          description: "The exact sentence to replace (defaults to the assumption's text)"
+        newSentence:
+          title: New sentence
+          type: string
+          required: false
+          description: "The exact new sentence to put in the doc"
+        pageId:
+          title: Confluence page ID
+          type: string
+          required: false
+          description: "Optional. Defaults to the assumption's page."
+    - key: propose-resolution
+      name: Propose a resolution plan
+      function: proposeResolutionFn
+      actionVerb: UPDATE
+      description: |
+        Drafts a resolution plan for a broken assumption and saves it on the assumption. NOTHING is done: a person ticks the steps they
+        approve in the Hindsight panel and clicks Apply. Call it once, with everything you recommend.
+      inputs:
+        ticketKey:
+          title: Revisit ticket key
+          type: string
+          required: false
+          description: "The Revisit ticket key of the assumption, for example KAN-17"
+        text:
+          title: Assumption words
+          type: string
+          required: false
+          description: "Words of the current assumption, if no ticket key is known"
+        comment:
+          title: Comment for the ticket
+          type: string
+          required: false
+          description: "Your evidence review in a few plain sentences, to be posted on the Revisit ticket. No invented numbers."
+        assignOwner:
+          title: Assign the ticket to the suggested owner
+          type: boolean
+          required: false
+          description: "True to include a step that assigns the Revisit ticket to the suggested owner"
+        followupTasks:
+          title: Follow-up tasks
+          type: string
+          required: false
+          description: "One Jira task title per line, for concrete follow-up work (at most 5)"
+        newSentence:
+          title: New sentence
+          type: string
+          required: false
+          description: "The new wording for the design doc and the assumption, if the claim should change"
+        newThreshold:
+          title: New threshold
+          type: integer
+          required: false
+          description: "New number of matching issues that trips the assumption"
+        newWindowDays:
+          title: New window in days
+          type: integer
+          required: false
+          description: "New time window in days"
+        newJql:
+          title: New Jira query
+          type: string
+          required: false
+          description: "New JQL for the tripwire (no ORDER BY)"
+  # ---- Runs every hour: re-checks every assumption with plain code (no AI) ----
+  scheduledTrigger:
+    - key: hourly-check
+      function: hourlyCheckFn
+      interval: hour
+  # ---- The backend functions ----
+  function:
+    - key: resolver
+      handler: index.handler
+    - key: listAssumptionsFn
+      handler: index.listAssumptionsAction
+    - key: explainAssumptionFn
+      handler: index.explainAssumptionAction
+    - key: getPageContentFn
+      handler: index.getPageContentAction
+    - key: docFreshnessFn
+      handler: index.docFreshnessAction
+    - key: saveAssumptionFn
+      handler: index.saveAssumptionAction
+    - key: releaseReadinessFn
+      handler: index.releaseReadinessAction
+    - key: linkAssumptionFn
+      handler: index.linkAssumptionAction
+    - key: acceptRiskFn
+      handler: index.acceptRiskAction
+    - key: commentOnTicketFn
+      handler: index.commentOnTicketAction
+    - key: assignTicketFn
+      handler: index.assignTicketAction
+    - key: createFollowupTaskFn
+      handler: index.createFollowupTaskAction
+    - key: reviseAssumptionFn
+      handler: index.reviseAssumptionAction
+    - key: updateDocSentenceFn
+      handler: index.updateDocSentenceAction
+    - key: proposeResolutionFn
+      handler: index.proposeResolutionAction
+    - key: hourlyCheckFn
+      handler: index.hourlyCheck
+resources:
+  - key: main
+    path: src/frontend/index.jsx
+  - key: dashboard
+    path: src/frontend/dashboard.jsx
+  - key: settings
+    path: src/frontend/settings.jsx
+permissions:
+  scopes:
+    # Forge key-value storage (where assumptions are saved).
+    - storage:app
+    # Count/search Jira issues for tripwires.
+    - read:jira-work
+    # Read the text of the Confluence page, to suggest assumptions from it (read-only).
+    - read:page:confluence
+    # Sample data (site admins only): list spaces, create the demo page, and remove it again.
+    - read:space:confluence
+    - write:page:confluence
+    - delete:page:confluence
+    # Optional: add a footer comment on the Confluence page when an assumption breaks (off by default).
+    - write:comment:confluence
+    # Create the "Revisit assumption" ticket.
+    - write:jira-work
+app:
+  runtime:
+    name: nodejs24.x
+    memoryMB: 256
+    architecture: arm64
+  id: ari:cloud:ecosystem::app/4093edd8-eb2b-4cc6-aea2-2f9da7b76129
